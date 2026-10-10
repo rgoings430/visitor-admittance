@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Visitor Admittance</title>
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#eef3f7;color:#1f2937}
+.app{max-width:820px;margin:auto;padding:20px 16px}
+.card{background:#fff;border-radius:18px;padding:22px;margin:16px 0;box-shadow:0 4px 18px rgba(15,23,42,.08)}
+h1,h2{margin:0 0 8px}.tabs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{border:0;border-radius:11px;padding:13px 16px;font-weight:800;font-size:16px}
+.primary{background:#1f4e78;color:#fff}.secondary{background:#e2e8f0}.success{background:#15803d;color:#fff}
+.wide{width:100%}.form{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.full{grid-column:1/-1}label{font-weight:700}input,select{width:100%;padding:12px;border:1px solid #cbd5e1;border-radius:10px;margin-top:6px;font-size:16px}
+input[readonly]{background:#f8fafc}.status{margin-top:12px;padding:10px;border-radius:9px;background:#eef2ff}.bad{background:#fef3f2;color:#b42318}.good{background:#ecfdf3;color:#166534}
+.modal{position:fixed;inset:0;background:rgba(15,23,42,.72);display:none;align-items:center;justify-content:center;padding:16px}
+.modal.open{display:flex}.modal-card{background:#fff;border-radius:18px;padding:16px;width:min(780px,100%)}
+.video-wrap{position:relative;background:#000;border-radius:14px;overflow:hidden;aspect-ratio:16/9}
+video{width:100%;height:100%;object-fit:cover}
+.guide{position:absolute;left:5%;right:5%;top:28%;height:44%;border:3px solid #fff;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.18)}
+.debug{margin-top:8px;padding:8px;background:#f8fafc;border-radius:8px;font-size:13px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+@media(max-width:650px){.form{grid-template-columns:1fr}.full{grid-column:auto}.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="app">
+<h1>Visitor Admittance</h1>
+
+<div class="tabs">
+<button class="primary">Check In Visitor</button>
+<button class="secondary">Badge Return</button>
+</div>
+
+<div class="card">
+<h2>1. Scan Visitor ID</h2>
+<p>High-resolution live scan. Put the PDF417 barcode on the BACK of the ID inside the white box.</p>
+<button id="scanBtn" class="primary wide">Scan ID Barcode</button>
+<div id="scanStatus" class="status">Ready for high-resolution live scan.</div>
+</div>
+
+<form id="visitorForm" class="card form">
+<h2 class="full">2. Visitor Information</h2>
+<label class="full">Name<input id="name" readonly placeholder="First Last"></label>
+<label>Badge #<input id="badge" inputmode="numeric" placeholder="1 - 200"></label>
+<label>Date<input id="date" readonly></label>
+<label class="full">Company<input id="company" placeholder="Tap field, then use iPhone microphone"></label>
+<label class="full">Person to be Visited<input id="person" placeholder="Tap field, then use iPhone microphone"></label>
+<label>Ext #<input id="ext" inputmode="numeric"></label>
+<label>Officer Initials<input id="initials"></label>
+<label>ID Verified<select id="verified"><option value="">Select</option><option>Yes</option><option>No</option></select></label>
+<label>ID Scan / Check-In Time<input id="checkinTime" readonly></label>
+<div class="full row"><button type="button" class="secondary" id="clearBtn">Clear Form</button><button type="submit" class="success">Save Visitor</button></div>
+<div id="formStatus" class="status full">Ready for next visitor.</div>
+</form>
+</main>
+
+<div id="cameraModal" class="modal">
+<div class="modal-card">
+<h2>Scan Back of ID</h2>
+<div class="video-wrap">
+<video id="video" autoplay muted playsinline></video>
+<div class="guide"></div>
+</div>
+<div id="debug" class="debug">Starting camera...</div>
+<div class="row">
+<button id="switchBtn" class="secondary">Switch Camera</button>
+<button id="cancelBtn" class="primary">Cancel Scan</button>
+</div>
+</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let stream=null,timer=null,cameras=[],cameraIndex=0,count=0;
+
+function pad(n){return String(n).padStart(2,'0')}
+function fd(d){return `${pad(d.getMonth()+1)}/${pad(d.getDate())}/${d.getFullYear()}`}
+function ft(d){return d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'})}
+$('date').value=fd(new Date());
+
+function status(msg,cls=''){const e=$('scanStatus');e.textContent=msg;e.className='status '+cls}
+function parseField(raw,code){
+  const text=String(raw||'').replace(/\r/g,'\n');
+  let m=text.match(new RegExp('(?:^|\\n)'+code+'([^\\n\\r]+)','i'));
+  if(m)return m[1].trim();
+  const stops='DCS|DAC|DCT|DAD|DDE|DDF|DDG|DCA|DCB|DCD|DBD|DBB|DBA|DBC|DAU|DAY|DAG|DAI|DAJ|DAK|DCF|DCG|DAW|DAZ|DCL|DCK|DDA|DDB|DDC|DDD|ZNA|ZNB|ZNC';
+  m=text.match(new RegExp(code+'(.+?)(?='+stops+'|$)','i'));
+  return m?m[1].trim():'';
+}
+function clean(s){return String(s||'').replace(/[^A-Za-z' -]/g,' ').replace(/\s+/g,' ').trim()}
+function title(s){return s.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase())}
+function parseName(raw){
+  let last=clean(parseField(raw,'DCS')), first=clean(parseField(raw,'DAC')||parseField(raw,'DCT'));
+  if(!first||!last)return '';
+  first=first.split(' ')[0];last=last.split(' ')[0];
+  return title(first+' '+last);
+}
+function stopCamera(){
+  if(timer){clearInterval(timer);timer=null}
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}
+  $('video').srcObject=null;$('cameraModal').classList.remove('open')
+}
+async function listCameras(){
+  const d=await navigator.mediaDevices.enumerateDevices();
+  cameras=d.filter(x=>x.kind==='videoinput');
+}
+function cropFrame(){
+  const v=$('video'); if(!v.videoWidth)return null;
+  const sx=Math.round(v.videoWidth*.05), sy=Math.round(v.videoHeight*.22);
+  const sw=Math.round(v.videoWidth*.90), sh=Math.round(v.videoHeight*.56);
+  const c=document.createElement('canvas');c.width=sw;c.height=sh;
+  c.getContext('2d',{willReadFrequently:true}).drawImage(v,sx,sy,sw,sh,0,0,sw,sh);
+  return c
+}
+function contrast(src){
+  const c=document.createElement('canvas');c.width=src.width;c.height=src.height;
+  const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(src,0,0);
+  const im=ctx.getImageData(0,0,c.width,c.height),d=im.data;
+  for(let i=0;i<d.length;i+=4){let g=.299*d[i]+.587*d[i+1]+.114*d[i+2];g=(g-128)*1.6+128;g=Math.max(0,Math.min(255,g));d[i]=d[i+1]=d[i+2]=g}
+  ctx.putImageData(im,0,0);return c
+}
+function rotate(src,deg){
+  if(!deg)return src;
+  const swap=deg%180!==0,c=document.createElement('canvas');
+  c.width=swap?src.height:src.width;c.height=swap?src.width:src.height;
+  const ctx=c.getContext('2d',{willReadFrequently:true});ctx.translate(c.width/2,c.height/2);ctx.rotate(deg*Math.PI/180);ctx.drawImage(src,-src.width/2,-src.height/2);return c
+}
+function decodeCanvas(c){
+  const im=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,c.width,c.height);
+  const src=new ZXing.RGBLuminanceSource(im.data,c.width,c.height);
+  const bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src));
+  const hints=new Map();hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.PDF_417]);hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+  const r=new ZXing.MultiFormatReader();r.setHints(hints);return r.decode(bmp).getText()
+}
+function scanFrame(){
+  const base=cropFrame();if(!base)return;
+  count++;
+  for(const variant of [base,contrast(base)]){
+    for(const deg of [0,90,270,180]){
+      try{
+        const raw=decodeCanvas(rotate(variant,deg)), name=parseName(raw);
+        if(name){
+          $('name').value=name;
+          const now=new Date();$('checkinTime').value=`${fd(now)} ${ft(now)}`;
+          status(`Name found: ${name}. Verify it against the ID.`,'good');
+          stopCamera();return
+        }
+      }catch(_){}
+    }
+  }
+  if(count%4===0){
+    const t=stream&&stream.getVideoTracks()[0],s=t?t.getSettings():{};
+    $('debug').textContent=`Camera ${s.width||'?'}x${s.height||'?'} - scanning frame ${count}`;
+  }
+}
+async function startCamera(){
+  if(!window.isSecureContext){status('Use http://localhost or HTTPS.','bad');return}
+  if(!window.ZXing){status('ZXing did not load. Stay online and refresh.','bad');return}
+  stopCamera();$('cameraModal').classList.add('open');count=0;
+  await listCameras();
+  const selected=cameras[cameraIndex];
+  const constraints={audio:false,video:selected?{deviceId:{exact:selected.deviceId},width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30}}:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}};
+  try{
+    stream=await navigator.mediaDevices.getUserMedia(constraints);
+    $('video').srcObject=stream;await $('video').play();
+    const s=stream.getVideoTracks()[0].getSettings();
+    $('debug').textContent=`Camera ${s.width||'?'}x${s.height||'?'} - scanning...`;
+    status('High-resolution camera open. Hold barcode steady inside the box.');
+    timer=setInterval(scanFrame,250);
+  }catch(e){stopCamera();status('Could not start camera. Check camera permission.','bad')}
+}
+$('scanBtn').onclick=startCamera;
+$('cancelBtn').onclick=()=>{stopCamera();status('Scan cancelled.')};
+$('switchBtn').onclick=async()=>{await listCameras();if(cameras.length<2){status('Only one camera is available.');return}cameraIndex=(cameraIndex+1)%cameras.length;stopCamera();setTimeout(startCamera,200)};
+$('clearBtn').onclick=()=>{$('visitorForm').reset();$('name').value='';$('date').value=fd(new Date());$('checkinTime').value='';status('Ready for high-resolution live scan.')};
+$('visitorForm').onsubmit=e=>{e.preventDefault();$('formStatus').textContent='Front-end test save works. Backend connection comes later.'};
+window.addEventListener('beforeunload',stopCamera);
+</script>
+</body>
+</html>
