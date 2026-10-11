@@ -194,6 +194,12 @@ let scanBusy = false;
 let scanFrames = 0;
 let records = JSON.parse(localStorage.getItem('va_records') || '[]');
 
+// Paste the Apps Script /exec URL here before uploading to GitHub Pages.
+const BACKEND_URL = "https://script.google.com/macros/s/AKfycbwP_idNYkFGVAtCTtFq_00tMRjpRA3RtpufPKmq4TXX0Z1ifLrRsUANK-tS2Bd9YDWbJQ/exec";
+
+// Preserve the exact successful scan time for the backend.
+let scanTimestampISO = "";
+
 const pad = n => String(n).padStart(2,'0');
 const dateStr = d => `${pad(d.getMonth()+1)}/${pad(d.getDate())}/${d.getFullYear()}`;
 const timeStr = d => d.toLocaleTimeString([], {hour:'numeric',minute:'2-digit',second:'2-digit'});
@@ -401,6 +407,7 @@ async function scanCurrentFrame(){
         $('name').value = name;
 
         const now = new Date();
+        scanTimestampISO = now.toISOString();
         $('date').value = dateStr(now);
         $('checkinTime').value = `${dateStr(now)} ${timeStr(now)}`;
 
@@ -439,12 +446,29 @@ $('clearBtn').addEventListener('click', () => {
   stopScanner();
   $('visitorForm').reset();
   $('name').value = '';
+  scanTimestampISO = '';
   resetTimestamp();
   setScanStatus('Ready for ZXing-WASM live scan.');
   setFormStatus('Ready for next visitor.');
 });
 
-$('visitorForm').addEventListener('submit', e => {
+
+async function sendBackend(payload){
+  if(!BACKEND_URL || BACKEND_URL.includes("https://script.google.com/macros/s/AKfycbwP_idNYkFGVAtCTtFq_00tMRjpRA3RtpufPKmq4TXX0Z1ifLrRsUANK-tS2Bd9YDWbJQ/exec")){
+    throw new Error("Backend URL has not been added yet.");
+  }
+
+  // Apps Script Web Apps don't provide normal browser CORS headers.
+  // A simple no-cors POST still sends the request successfully.
+  await fetch(BACKEND_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload)
+  });
+}
+
+$('visitorForm').addEventListener('submit', async e => {
   e.preventDefault();
 
   const badge = $('badge').value.trim();
@@ -466,38 +490,60 @@ $('visitorForm').addEventListener('submit', e => {
   }
 
   if(records.some(r => r.badge === badge && !r.returnedAt)){
-    setFormStatus(`Badge #${badge} is already checked out.`, 'bad');
+    setFormStatus(`Badge #${badge} is already checked out on this phone.`, 'bad');
     return;
   }
 
-  records.push({
-    badge,
-    name,
+  const payload = {
+    action: 'saveVisitor',
+    badge: badge,
+    name: name,
     company: $('company').value.trim(),
     person: $('person').value.trim(),
     ext: $('ext').value.trim(),
     initials: $('initials').value.trim(),
     verified: $('verified').value,
-    date: $('date').value,
-    checkinTime: $('checkinTime').value,
-    returnedAt: ''
-  });
+    checkinTime: scanTimestampISO || new Date().toISOString()
+  };
 
-  localStorage.setItem('va_records', JSON.stringify(records));
-  renderRecords();
+  try{
+    setFormStatus('Sending visitor to Google Sheet/AppSheet…');
 
-  setFormStatus(`Saved ${name}. Fresh form ready.`, 'good');
+    await sendBackend(payload);
 
-  setTimeout(() => {
-    $('visitorForm').reset();
-    $('name').value = '';
-    resetTimestamp();
-    setScanStatus('Ready for ZXing-WASM live scan.');
-    setFormStatus('Ready for next visitor.');
-  }, 650);
+    records.push({
+      badge,
+      name,
+      company: payload.company,
+      person: payload.person,
+      ext: payload.ext,
+      initials: payload.initials,
+      verified: payload.verified,
+      date: $('date').value,
+      checkinTime: $('checkinTime').value,
+      returnedAt: ''
+    });
+
+    localStorage.setItem('va_records', JSON.stringify(records));
+    renderRecords();
+
+    setFormStatus(`Visitor sent: ${name}. Fresh form ready.`, 'good');
+
+    setTimeout(() => {
+      $('visitorForm').reset();
+      $('name').value = '';
+      scanTimestampISO = '';
+      resetTimestamp();
+      setScanStatus('Ready for ZXing-WASM live scan.');
+      setFormStatus('Ready for next visitor.');
+    }, 650);
+
+  }catch(err){
+    setFormStatus('Could not send visitor to backend: ' + (err?.message || err), 'bad');
+  }
 });
 
-$('returnBtn').addEventListener('click', () => {
+$('returnBtn').addEventListener('click', async () => {
   const badge = $('returnBadge').value.trim();
 
   if(!validBadge(badge)){
@@ -505,43 +551,68 @@ $('returnBtn').addEventListener('click', () => {
     return;
   }
 
-  const record = [...records].reverse().find(r => r.badge === badge && !r.returnedAt);
+  try{
+    $('returnStatus').textContent = 'Sending badge return to backend…';
 
-  if(!record){
-    $('returnStatus').textContent = `No open visitor found for badge #${badge}.`;
-    return;
+    await sendBackend({
+      action: 'returnBadge',
+      badge: badge
+    });
+
+    const record = [...records].reverse().find(r => r.badge === badge && !r.returnedAt);
+    if(record){
+      record.returnedAt = `${dateStr(new Date())} ${timeStr(new Date())}`;
+      localStorage.setItem('va_records', JSON.stringify(records));
+      renderRecords();
+    }
+
+    $('returnStatus').textContent = `Badge #${badge} return sent to backend.`;
+    $('returnBadge').value = '';
+
+  }catch(err){
+    $('returnStatus').textContent = 'Could not send badge return: ' + (err?.message || err);
   }
-
-  record.returnedAt = `${dateStr(new Date())} ${timeStr(new Date())}`;
-  localStorage.setItem('va_records', JSON.stringify(records));
-  renderRecords();
-
-  $('returnStatus').textContent =
-    `Badge #${badge} returned for ${record.name}.`;
-
-  $('returnBadge').value = '';
 });
 
-$('editReturnBtn').addEventListener('click', () => {
+$('editReturnBtn').addEventListener('click', async () => {
   const badge = $('returnBadge').value.trim();
   const record = [...records].reverse().find(r => r.badge === badge);
 
-  if(!record){
-    $('returnStatus').textContent = 'Enter a badge number with a saved record.';
+  if(!validBadge(badge)){
+    $('returnStatus').textContent = 'Enter a badge number from 1 to 200.';
     return;
   }
 
-  const value = prompt(
-    `Edit return time for ${record.name}`,
-    record.returnedAt || `${dateStr(new Date())} ${timeStr(new Date())}`
-  );
+  const defaultValue = record?.returnedAt || `${dateStr(new Date())} ${timeStr(new Date())}`;
+  const value = prompt(`Edit return time for badge #${badge}`, defaultValue);
 
-  if(value !== null){
-    record.returnedAt = value.trim();
-    localStorage.setItem('va_records', JSON.stringify(records));
-    renderRecords();
-    $('returnStatus').textContent =
-      `Return time updated for ${record.name}.`;
+  if(value === null) return;
+
+  const parsed = new Date(value);
+  if(Number.isNaN(parsed.getTime())){
+    $('returnStatus').textContent = 'That return time could not be understood. Try again.';
+    return;
+  }
+
+  try{
+    $('returnStatus').textContent = 'Sending corrected return time to backend…';
+
+    await sendBackend({
+      action: 'editReturnTime',
+      badge: badge,
+      returnTime: parsed.toISOString()
+    });
+
+    if(record){
+      record.returnedAt = value.trim();
+      localStorage.setItem('va_records', JSON.stringify(records));
+      renderRecords();
+    }
+
+    $('returnStatus').textContent = `Return time update sent for badge #${badge}.`;
+
+  }catch(err){
+    $('returnStatus').textContent = 'Could not send return-time update: ' + (err?.message || err);
   }
 });
 
