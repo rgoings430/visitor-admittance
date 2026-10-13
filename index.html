@@ -158,7 +158,11 @@ input[readonly]{background:#f8fafc;color:#475569}
       <button id="returnBtn" class="btn primary">Return Badge</button>
       <button id="editReturnBtn" class="btn secondary">Edit Return Time</button>
     </div>
+<label class="return-badge">Badge Note
+  <textarea id="badgeNote" rows="3" placeholder="Example: Visitor left with badge. Follow up tomorrow."></textarea>
+</label>
 
+<button id="notReturnedBtn" class="btn secondary">Mark Not Returned</button>
     <div id="returnStatus" class="status">No badge selected.</div>
   </div>
 
@@ -558,7 +562,31 @@ $('returnBtn').addEventListener('click', async () => {
       action: 'returnBadge',
       badge: badge
     });
+$('notReturnedBtn').addEventListener('click', async () => {
+  const badge = Number($('returnBadge').value);
+  const note = $('badgeNote').value.trim();
 
+  if (!badge || badge < 1 || badge > 200) {
+    $('returnStatus').textContent = 'Enter a valid badge number.';
+    return;
+  }
+
+  try {
+    $('returnStatus').textContent = 'Marking badge as not returned…';
+
+    await sendBackend({
+      action: 'markNotReturned',
+      badge: badge,
+      note: note
+    });
+
+    $('returnStatus').textContent = 'Badge marked NOT RETURNED.';
+    $('badgeNote').value = '';
+
+  } catch (err) {
+    $('returnStatus').textContent = 'Could not update badge status.';
+  }
+});
     const record = [...records].reverse().find(r => r.badge === badge && !r.returnedAt);
     if(record){
       record.returnedAt = `${dateStr(new Date())} ${timeStr(new Date())}`;
