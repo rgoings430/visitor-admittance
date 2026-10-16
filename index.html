@@ -58,6 +58,10 @@ input[readonly]{background:#f8fafc;color:#475569}
   .form{grid-template-columns:1fr}.full{grid-column:auto}.actions{grid-template-columns:1fr 1.5fr}.return-grid{grid-template-columns:1fr}
   .modal-card{padding:10px}#cameraVideo{min-height:58vh}.video-wrap{aspect-ratio:3/4}
 }
+
+
+
+ 
 </style>
 </head>
 <body>
@@ -71,30 +75,33 @@ input[readonly]{background:#f8fafc;color:#475569}
   </div>
   <div class="clock"><span id="liveDate"></span><strong id="liveClock"></strong></div>
 </header>
-
 <nav class="tabs">
-  <button class="tab active" data-screen="checkin">Check In Visitor</button>
-  <button class="tab" data-screen="return">Badge Return</button>
+  <button class="tab active" data-screen="checkin">CHECK IN VISITOR</button>
+  <button class="tab" data-screen="return">RETURN BADGE</button>
+  <button class="tab" data-screen="notreturned">NOT RETURNED</button>
 </nav>
-
+ 
 <section id="checkin" class="screen active">
   <div class="card">
     <div class="section-head">
       <span class="step">1</span>
       <div>
-        <h2>Scan Visitor ID</h2>
-        <p>Free ZXing-C++ WebAssembly scanner. Point the iPhone rear camera at the PDF417 barcode on the BACK of the ID.</p>
+        <h2>Scan Driver's License</h2>
+       <p>Scan the barcode on the back of the driver's license.</p>
       </div>
     </div>
-    <button id="scanBtn" class="btn primary wide" type="button">Scan ID Barcode</button>
-    <div id="scanStatus" class="status">Ready for ZXing-WASM live scan.</div>
+    <button id="scanBtn" class="btn primary wide" type="button">SCAN DRIVER'S LICENSE</button>
+    <div id="scanStatus" class="status">Ready to scan.</div>
   </div>
 
-  <form id="visitorForm" class="card form">
-    <div class="section-head full">
-      <span class="step">2</span>
-      <div><h2>Visitor Information</h2><p>Complete the remaining fields, then save the visitor.</p></div>
-    </div>
+<form id="visitorForm" class="card form">
+ <div class="section-head full">
+    <span class="step">2</span>
+  <div>
+    <h2>Visitor Information</h2>
+    <p>Fill in the information below.</p>
+  </div>
+</div>
 
     <label class="full namebox">Name
       <input id="name" readonly placeholder="First Last">
@@ -109,11 +116,11 @@ input[readonly]{background:#f8fafc;color:#475569}
     </label>
 
     <label class="full voice">Company
-      <input id="company" placeholder="Tap field, then use iPhone microphone">
+     <input id="company" placeholder="Company">
     </label>
 
     <label class="full voice">Person to be Visited
-      <input id="person" placeholder="Tap field, then use iPhone microphone">
+      <input id="person" placeholder="Person Visited">
     </label>
 
     <label>Ext #
@@ -130,7 +137,7 @@ input[readonly]{background:#f8fafc;color:#475569}
       </select>
     </label>
 
-    <label>ID Scan / Check-In Time
+   <label>Check-In Time
       <input id="checkinTime" readonly>
     </label>
 
@@ -147,7 +154,10 @@ input[readonly]{background:#f8fafc;color:#475569}
   <div class="card">
     <div class="section-head">
       <span class="step">1</span>
-      <div><h2>Badge Return</h2><p>Enter the badge number and choose an action.</p></div>
+      <div>
+  <h2>Return Badge</h2>
+  <p>Enter the badge number.</p>
+</div>
     </div>
 
     <label class="return-badge">Badge #
@@ -158,15 +168,38 @@ input[readonly]{background:#f8fafc;color:#475569}
       <button id="returnBtn" class="btn primary">Return Badge</button>
       <button id="editReturnBtn" class="btn secondary">Edit Return Time</button>
     </div>
-<label class="return-badge">Badge Note
-  <textarea id="badgeNote" rows="3" placeholder="Example: Visitor left with badge. Follow up tomorrow."></textarea>
-</label>
 
-<button id="notReturnedBtn" class="btn secondary">Mark Not Returned</button>
     <div id="returnStatus" class="status">No badge selected.</div>
   </div>
-
+</section>
+<section id="notreturned" class="screen">
   <div class="card">
+    <div class="section-head">
+      <span class="step">1</span>
+      <div>
+        <h2>Not Returned</h2>
+        <p>Enter the badge number and add a short note.</p>
+      </div>
+    </div>
+
+    <label class="return-badge">Badge #
+      <input id="notReturnedBadge" inputmode="numeric" placeholder="1 - 200">
+    </label>
+
+    <label class="return-badge">Badge Note
+      <textarea id="notReturnedNote" rows="3" placeholder="Example: Visitor left with badge."></textarea>
+    </label>
+
+    <button id="notReturnedScreenBtn" class="btn primary">
+      MARK NOT RETURNED
+    </button>
+
+    <div id="notReturnedStatus" class="status">
+      Enter a badge number.
+    </div>
+  </div>
+</section>
+ <div class="card">
     <h3>Front-End Test Records</h3>
     <p style="color:#64748b">Local browser test records only. Google Sheet/AppSheet connection comes later.</p>
     <div id="records"></div>
@@ -190,6 +223,19 @@ input[readonly]{background:#f8fafc;color:#475569}
 </div>
 
 <script>
+
+
+
+
+
+
+
+
+
+
+
+
+  
 const $ = id => document.getElementById(id);
 
 let stream = null;
@@ -547,32 +593,43 @@ $('visitorForm').addEventListener('submit', async e => {
   }
 });
 
+
 $('returnBtn').addEventListener('click', async () => {
   const badge = $('returnBadge').value.trim();
 
-  if(!validBadge(badge)){
+  if (!validBadge(badge)) {
     $('returnStatus').textContent = 'Enter a badge number from 1 to 200.';
     return;
   }
 
-  try{
-    $('returnStatus').textContent = 'Sending badge return to backend…';
+  try {
+    $('returnStatus').textContent = 'Sending badge return to backend...';
 
     await sendBackend({
       action: 'returnBadge',
       badge: badge
     });
-$('notReturnedBtn').addEventListener('click', async () => {
-  const badge = Number($('returnBadge').value);
-  const note = $('badgeNote').value.trim();
+
+    $('returnStatus').textContent = 'Badge returned.';
+
+  } catch (err) {
+    $('returnStatus').textContent = 'Could not return badge.';
+  }
+});
+
+   
+
+$('notReturnedScreenBtn').addEventListener('click', async () => {
+  const badge = Number($('notReturnedBadge').value);
+  const note = $('notReturnedNote').value.trim();
 
   if (!badge || badge < 1 || badge > 200) {
-    $('returnStatus').textContent = 'Enter a valid badge number.';
+    $('notReturnedStatus').textContent = 'Enter a valid badge number.';
     return;
   }
 
   try {
-    $('returnStatus').textContent = 'Marking badge as not returned…';
+    $('notReturnedStatus').textContent = 'Updating badge...';
 
     await sendBackend({
       action: 'markNotReturned',
@@ -580,13 +637,38 @@ $('notReturnedBtn').addEventListener('click', async () => {
       note: note
     });
 
+    $('notReturnedStatus').textContent = 'Badge marked NOT RETURNED.';
+    $('notReturnedBadge').value = '';
+    $('notReturnedNote').value = '';
+
+  } catch (err) {
+    $('notReturnedStatus').textContent = 'Could not update badge.';
+  }
+});
+
+    
+  try {
+    $('notReturnedStatus').textContent = 'Updating badge...';
+
+    await sendBackend({
+      action: 'markNotReturned',
+      badge: badge,
+      note: note
+    });
+
+    $('notReturnedStatus').textContent = 'Badge marked NOT RETURNED.';
+    $('notReturnedBadge').value = '';
+    $('notReturnedNote').value = '';
+
+  } catch (err) {
+    $('notReturnedStatus').textContent = 'Could not update badge.';
+  }
+});
+
     $('returnStatus').textContent = 'Badge marked NOT RETURNED.';
     $('badgeNote').value = '';
 
-  } catch (err) {
-    $('returnStatus').textContent = 'Could not update badge status.';
-  }
-});
+
     const record = [...records].reverse().find(r => r.badge === badge && !r.returnedAt);
     if(record){
       record.returnedAt = `${dateStr(new Date())} ${timeStr(new Date())}`;
