@@ -555,22 +555,29 @@
       </label>
 
 
-      <label class="full voice">
-        Person Visited
-        <input
-          id="person"
-          placeholder="Person Visited">
-      </label>
+     <label class="full voice">
+  Person Visited
+  <input
+    id="person"
+    list="personList"
+    autocomplete="off"
+    placeholder="Start typing a name">
+
+  <datalist id="personList"></datalist>
+</label>
 
 
-      <label>
-        Ext #
-        <input
-          id="ext"
-          inputmode="numeric"
-          placeholder="Extension">
-      </label>
+     <label>
+  Ext #
+  <input
+    id="ext"
+    list="extList"
+    autocomplete="off"
+    inputmode="numeric"
+    placeholder="Extension">
 
+  <datalist id="extList"></datalist>
+</label>
 
       <label>
         Officer Initials
@@ -835,8 +842,63 @@ let records =
 
 const BACKEND_URL =
   "https://script.google.com/macros/s/AKfycbwP_idNYkFGVAtCTtFq_00tMRjpRA3RtpufPKmq4TXX0Z1ifLrRsUANK-tS2Bd9YDWbJQ/exec";
+let employeeDirectory = [];
+function fillDirectoryLists() {
+  const personList = $('personList');
+  const extList = $('extList');
 
+  personList.innerHTML = '';
+  extList.innerHTML = '';
 
+  employeeDirectory.forEach(employee => {
+    const personOption = document.createElement('option');
+    personOption.value = employee.person;
+    personList.appendChild(personOption);
+
+    const extOption = document.createElement('option');
+    extOption.value = employee.ext;
+    extList.appendChild(extOption);
+  });
+}
+function findEmployeeByPerson(person) {
+  const value = String(person || '').trim().toLowerCase();
+
+  return employeeDirectory.find(
+    employee =>
+      String(employee.person || '')
+        .trim()
+        .toLowerCase() === value
+  );
+}
+
+function findEmployeeByExt(ext) {
+  const value = String(ext || '').trim();
+
+  return employeeDirectory.find(
+    employee =>
+      String(employee.ext || '').trim() === value
+  );
+}
+
+$('person').addEventListener('change', () => {
+  const employee = findEmployeeByPerson(
+    $('person').value
+  );
+
+  if (employee) {
+    $('ext').value = employee.ext;
+  }
+});
+
+$('ext').addEventListener('change', () => {
+  const employee = findEmployeeByExt(
+    $('ext').value
+  );
+
+  if (employee) {
+    $('person').value = employee.person;
+  }
+});
 let scanTimestampISO =
   "";
 
