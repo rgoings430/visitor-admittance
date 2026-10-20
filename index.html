@@ -860,6 +860,47 @@ function fillDirectoryLists() {
     extList.appendChild(extOption);
   });
 }
+function loadEmployeeDirectory(data) {
+  if (!data || !data.ok || !Array.isArray(data.employees)) {
+    console.log('Employee Directory failed to load.');
+    return;
+  }
+
+  employeeDirectory = data.employees;
+
+  fillDirectoryLists();
+
+  console.log(
+    'Employee Directory loaded:',
+    employeeDirectory.length
+  );
+}
+
+function requestEmployeeDirectory() {
+  const oldScript =
+    document.getElementById('employeeDirectoryLoader');
+
+  if (oldScript) {
+    oldScript.remove();
+  }
+
+  const script =
+    document.createElement('script');
+
+  script.id =
+    'employeeDirectoryLoader';
+
+  script.src =
+    BACKEND_URL +
+    '?action=employeeDirectory&ts=' +
+    Date.now();
+
+  document.body.appendChild(script);
+}
+
+requestEmployeeDirectory();
+
+  
 function findEmployeeByPerson(person) {
   const value = String(person || '').trim().toLowerCase();
 
