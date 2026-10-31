@@ -1811,6 +1811,46 @@ $('clearBtn')
    ============================================================ */
 let backendBusy = false;
 
+function newRequestId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+function requestReceipt(requestId) {
+  return new Promise((resolve, reject) => {
+    const callback = 'VAreceipt_' + newRequestId();
+    const script = document.createElement('script');
+    let timer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      script.remove();
+      // A timed-out script might still arrive; leave a harmless short-lived callback.
+      window[callback] = () => {};
+      setTimeout(() => { delete window[callback]; }, 60000);
+    };
+    window[callback] = data => { cleanup(); resolve(data); };
+    script.onerror = () => { cleanup(); reject(new Error('Confirmation unavailable.')); };
+    timer = setTimeout(() => { cleanup(); reject(new Error('Confirmation timed out.')); }, 10000);
+    script.src = BACKEND_URL + '?action=requestStatus&requestId=' + encodeURIComponent(requestId) +
+      '&callback=' + callback + '&ts=' + Date.now();
+    document.body.appendChild(script);
+  });
+}
+
+async function waitForReceipt(requestId, duration = 70000) {
+  const deadline = Date.now() + duration;
+  while (Date.now() < deadline) {
+    try {
+      const receipt = await requestReceipt(requestId);
+      if (receipt?.requestId === requestId && receipt.state === 'done' &&
+          typeof receipt.result?.ok === 'boolean') return receipt.result;
+    } catch (error) { /* Retry only the read-only confirmation lookup. */ }
+    await new Promise(resolve => setTimeout(resolve, 1500));
+  }
+  throw new Error('Confirmation is still unavailable. Check Visitor Log before trying again.');
+}
+
 async function sendBackend(payload) {
   if (!BACKEND_URL || BACKEND_URL.includes('PASTE_YOUR_WEB_APP_URL_HERE')) {
     throw new Error('Backend URL has not been added yet.');
@@ -1820,40 +1860,38 @@ async function sendBackend(payload) {
   const controls = [...document.querySelectorAll('button, input, select, textarea')];
   const previousDisabled = controls.map(control => control.disabled);
   controls.forEach(control => { control.disabled = true; });
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  let controller;
+  let timeoutId;
   try {
-    let response;
-    let text;
-    try {
-      response = await fetch(BACKEND_URL, {
-        method: 'POST',
-        mode: 'cors',
-        redirect: 'follow',
-        credentials: 'omit',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload),
-        signal: controller.signal
-      });
-      text = await response.text();
-    } catch (error) {
-      throw new Error('Confirmation was not received. The sheet may already be updated. Check Visitor Log before trying again.');
+    // Recover an unresolved request after a refresh, without resending it.
+    const pendingText = localStorage.getItem('va_pending_request');
+    if (pendingText) {
+      const pending = JSON.parse(pendingText);
+      const previous = await waitForReceipt(pending.requestId);
+      localStorage.removeItem('va_pending_request');
+      throw new Error(previous.ok
+        ? 'The previous action completed successfully. Check Visitor Log, then choose your next action.'
+        : (previous.error || 'The previous request was rejected.'));
     }
-    if (!response.ok) {
-      throw new Error('Server confirmation was unavailable (HTTP ' + response.status + '). Check Visitor Log before trying again.');
-    }
-    let result;
-    try { result = JSON.parse(text); }
-    catch (error) {
-      throw new Error('The server returned an unreadable confirmation. Check Visitor Log before trying again.');
-    }
-    if (!result || typeof result.ok !== 'boolean') {
-      throw new Error('The server returned an unexpected confirmation. Check Visitor Log before trying again.');
-    }
+    const requestId = newRequestId();
+    // Save before sending; if this fails, no update is submitted.
+    localStorage.setItem('va_pending_request', JSON.stringify({requestId}));
+    controller = new AbortController();
+    timeoutId = setTimeout(() => controller.abort(), 20000);
+    // Exactly ONE write request. Its response is deliberately not treated as confirmation.
+    fetch(BACKEND_URL, {
+      method: 'POST', mode: 'no-cors', credentials: 'omit',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({...payload, requestId}), signal: controller.signal
+    }).catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    const result = await waitForReceipt(requestId);
+    if (!result.uncertain) localStorage.removeItem('va_pending_request');
     if (!result.ok) throw new Error(result.error || 'The server rejected this request.');
     return result;
   } finally {
     clearTimeout(timeoutId);
+    if (controller) controller.abort();
     controls.forEach((control, i) => { control.disabled = previousDisabled[i]; });
     backendBusy = false;
   }
