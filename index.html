@@ -834,12 +834,17 @@ let scanBusy = false;
 let scanFrames = 0;
 
 
-let records =
-  JSON.parse(
-    localStorage.getItem('va_records') || '[]'
-  );
+// Local history is a convenience; Visitor Log remains authoritative.
+let records = [];
+try {
+  const cached = JSON.parse(localStorage.getItem('va_records') || '[]');
+  if (Array.isArray(cached)) records = cached;
+} catch (error) { console.warn('Local visitor history unavailable.', error); }
 
-
+function persistRecords() {
+  try { localStorage.setItem('va_records', JSON.stringify(records)); }
+  catch (error) { console.warn('Local history could not be saved.', error); }
+}
 
 const BACKEND_URL = 
       "https://script.google.com/macros/s/AKfycbxs_PmtYpPJLIWW6PZMiSo7ofbBx82rk0Rn7k4Hc15mqC6egfXNxZsPR5D1g22YgcyBaA/exec";
@@ -1804,32 +1809,55 @@ $('clearBtn')
 /* ============================================================
    8. BACKEND COMMUNICATION
    ============================================================ */
+let backendBusy = false;
+
 async function sendBackend(payload) {
-  if (
-    !BACKEND_URL ||
-    BACKEND_URL.includes('PASTE_YOUR_WEB_APP_URL_HERE')
-  ) {
+  if (!BACKEND_URL || BACKEND_URL.includes('PASTE_YOUR_WEB_APP_URL_HERE')) {
     throw new Error('Backend URL has not been added yet.');
   }
-
+  if (backendBusy) throw new Error('Please wait for the current request to finish.');
+  backendBusy = true;
+  const controls = [...document.querySelectorAll('button, input, select, textarea')];
+  const previousDisabled = controls.map(control => control.disabled);
+  controls.forEach(control => { control.disabled = true; });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 10000);
-
+  const timeoutId = setTimeout(() => controller.abort(), 45000);
   try {
-    await fetch(BACKEND_URL, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8'
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal
-    });
+    let response;
+    let text;
+    try {
+      response = await fetch(BACKEND_URL, {
+        method: 'POST',
+        mode: 'cors',
+        redirect: 'follow',
+        credentials: 'omit',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+      text = await response.text();
+    } catch (error) {
+      throw new Error('Confirmation was not received. The sheet may already be updated. Check Visitor Log before trying again.');
+    }
+    if (!response.ok) {
+      throw new Error('Server confirmation was unavailable (HTTP ' + response.status + '). Check Visitor Log before trying again.');
+    }
+    let result;
+    try { result = JSON.parse(text); }
+    catch (error) {
+      throw new Error('The server returned an unreadable confirmation. Check Visitor Log before trying again.');
+    }
+    if (!result || typeof result.ok !== 'boolean') {
+      throw new Error('The server returned an unexpected confirmation. Check Visitor Log before trying again.');
+    }
+    if (!result.ok) throw new Error(result.error || 'The server rejected this request.');
+    return result;
   } finally {
     clearTimeout(timeoutId);
+    controls.forEach((control, i) => { control.disabled = previousDisabled[i]; });
+    backendBusy = false;
   }
 }
-
 
 
 /* ============================================================
@@ -1897,24 +1925,6 @@ $('visitorForm')
 
         setFormStatus(
           'Complete Person Visited, Initials, and ID Verified.',
-          'bad'
-        );
-
-        return;
-      }
-
-
-      if (
-        records.some(
-          record =>
-            record.badge ===
-              badge &&
-            !record.returnedAt
-        )
-      ) {
-
-        setFormStatus(
-          `Badge #${badge} is already checked out on this phone.`,
           'bad'
         );
 
@@ -2019,12 +2029,7 @@ $('visitorForm')
         );
 
 
-        localStorage.setItem(
-          'va_records',
-          JSON.stringify(
-            records
-          )
-        );
+        persistRecords();
 
 
         setFormStatus(
@@ -2056,9 +2061,7 @@ $('visitorForm')
             );
 
 
-            setFormStatus(
-              'Ready for next visitor.'
-            );
+            // Keep the confirmed save message visible for the officer.
 
           },
           650
@@ -2068,7 +2071,7 @@ $('visitorForm')
       } catch (error) {
 
         setFormStatus(
-          'Could not save visitor: ' +
+          'Save visitor: ' +
           (error?.message || error),
           'bad'
         );
@@ -2141,12 +2144,7 @@ $('returnBtn')
             `${dateStr(new Date())} ${timeStr(new Date())}`;
 
 
-          localStorage.setItem(
-            'va_records',
-            JSON.stringify(
-              records
-            )
-          );
+          persistRecords();
         }
 
 
@@ -2164,7 +2162,7 @@ $('returnBtn')
 
         $('returnStatus')
           .textContent =
-          'Could not return badge.';
+          String(error?.message || error);
       }
     }
   );
@@ -2247,12 +2245,7 @@ $('notReturnedScreenBtn')
             note;
 
 
-          localStorage.setItem(
-            'va_records',
-            JSON.stringify(
-              records
-            )
-          );
+          persistRecords();
         }
 
 
@@ -2275,7 +2268,7 @@ $('notReturnedScreenBtn')
 
         $('notReturnedStatus')
           .textContent =
-          'Could not update badge.';
+          String(error?.message || error);
       }
     }
   );
@@ -2387,12 +2380,7 @@ $('editReturnBtn')
             value.trim();
 
 
-          localStorage.setItem(
-            'va_records',
-            JSON.stringify(
-              records
-            )
-          );
+          persistRecords();
         }
 
 
@@ -2405,7 +2393,7 @@ $('editReturnBtn')
 
         $('returnStatus')
           .textContent =
-          'Could not update return time.';
+          String(error?.message || error);
       }
     }
   );
